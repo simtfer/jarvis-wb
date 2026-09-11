@@ -5,10 +5,17 @@
         ├─ 模型只是说话 → 文本流给界面，写入记忆，结束
         └─ 模型要调工具 → 本地执行 → 结果回填消息链 → 再次请求模型
                           （最多 max_tool_rounds 轮，防止模型无限循环）
+
+防卡死设计：
+  - 同一轮里 (工具名 + 参数) 重复出现时直接熔断，不再重复执行、也不再请求模型；
+  - 工具返回"拒绝/不可用"类结果时，写进记忆的文本会附上"不要重试"的提示，
+    避免真实模型被拒绝后反复重试同一个工具，把一次对话拖成好几轮请求；
+  - 通过 on_status 把"第 N 轮"进度抛给界面，任何等待都不再是黑盒。
 """
 
 from __future__ import annotations
 
+import json
 from typing import Any, Callable
 
 from ..config import settings
@@ -24,9 +31,40 @@ from ..providers.base import (
 from ..skills import invoke_tool, tool_hints, tool_specs
 from .memory import ConversationMemory
 
-# 回调：文本增量 / 工具执行完毕（调用本身 + 返回结果）
+# 回调：文本增量 / 工具执行完毕（调用本身 + 返回结果）/ 进度状态
 TextCallback = Callable[[str], None]
 ToolCallback = Callable[[ToolCall, str], None]
+StatusCallback = Callable[[str], None]
+
+# 工具结果是"拒绝/不可用"类的标志词——命中就给记忆补一句"别重试"
+_REFUSAL_MARKERS = (
+    "默认关闭",
+    "不在白名单",
+    "危险黑名单",
+    "拒绝执行",
+    "没有名为",
+    "执行失败：",
+    "请告诉我要执行什么",
+)
+_NO_RETRY_HINT = "（该工具本次不可用或已被拒绝，不要重复调用它，请直接用现有信息回答用户。）"
+
+
+def _looks_refused(result: str) -> bool:
+    return any(marker in result for marker in _REFUSAL_MARKERS)
+
+
+def _with_retry_guard(result: str) -> str:
+    """写给模型看的版本：拒绝类结果额外附上"不要重试"。"""
+    return result + "\n" + _NO_RETRY_HINT if _looks_refused(result) else result
+
+
+def _call_key(call: ToolCall) -> str:
+    """工具调用的指纹：同名同参视为同一次调用。"""
+    try:
+        args = json.dumps(call.arguments, sort_keys=True, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        args = repr(call.arguments)
+    return f"{call.name}|{args}"
 
 
 class Brain:
@@ -38,7 +76,11 @@ class Brain:
         memory: ConversationMemory | None = None,
     ) -> None:
         cfg = settings.load()
-        self.provider = provider or create_provider(cfg.provider, tool_hints=tool_hints())
+        self.provider = provider or create_provider(
+            cfg.provider,
+            tool_hints=tool_hints(),
+            request_timeout=cfg.request_timeout,
+        )
         self.memory = memory or ConversationMemory()
         self.max_tool_rounds = cfg.max_tool_rounds
         self.tools_enabled = cfg.tools_enabled
@@ -56,6 +98,7 @@ class Brain:
         user_text: str,
         on_text: TextCallback | None = None,
         on_tool: ToolCallback | None = None,
+        on_status: StatusCallback | None = None,
     ) -> str:
         """处理一句用户输入：流式产出文本、按需调用本地工具，返回最终回复。"""
         self.memory.add("user", user_text)
@@ -64,7 +107,11 @@ class Brain:
 
         text = ""
         calls: list[ToolCall] = []
-        for _round in range(self.max_tool_rounds + 1):
+        executed: dict[str, str] = {}  # 本轮已执行过的调用指纹 → 结果
+
+        for round_no in range(1, self.max_tool_rounds + 2):
+            if on_status:
+                on_status(f"第 {round_no} 轮 · 等待模型响应…")
             try:
                 text, calls = self._run_once(tools, on_text)
             except ProviderError:
@@ -77,9 +124,29 @@ class Brain:
 
             # 模型要求调用工具：记录调用 → 本地执行 → 结果回填
             self.memory.add_assistant(text, tool_calls=calls)
+
+            # 熔断：同一轮里重复要同一个工具 + 同样参数 → 多半是死循环，直接收口
+            repeated = next((c for c in calls if _call_key(c) in executed), None)
+            if repeated is not None:
+                answer = executed[_call_key(repeated)]
+                for call in calls:
+                    self.memory.add_tool(call.id, call.name, answer)
+                self.memory.add("assistant", answer)
+                if on_status:
+                    on_status(f"检测到重复调用 {repeated.name}（同参数），已熔断：直接采用已有结果")
+                if on_text and answer:
+                    on_text(answer)  # 答案不走模型，直接交给界面
+                return answer
+
             for call in calls:
-                result = invoke_tool(call.name, call.arguments)
-                self.memory.add_tool(call.id, call.name, result)
+                key = _call_key(call)
+                if key in executed:  # 同一批次的多个调用里出现重复
+                    result = executed[key]
+                else:
+                    result = invoke_tool(call.name, call.arguments)
+                    executed[key] = result
+                # 记忆里放"带禁重试提示"的版本，界面显示原始结果
+                self.memory.add_tool(call.id, call.name, _with_retry_guard(result))
                 if on_tool:
                     on_tool(call, result)
 

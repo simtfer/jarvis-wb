@@ -80,9 +80,12 @@ class BaseProvider(ABC):
         base_url: str | None = None,
         model: str | None = None,
         tool_hints: dict[str, list[str]] | None = None,
+        request_timeout: float | None = None,
     ) -> None:
         # tool_hints 只有离线演示提供商（echo）会用到：{工具名: [触发关键词]}
         self.tool_hints = tool_hints or {}
+        # 单次请求超时（秒）；None 表示由具体提供商决定（一般是配置里的默认值）
+        self.request_timeout = request_timeout
 
     @abstractmethod
     def complete(self, messages: list[Message], tools: list[ToolSpec] | None = None) -> AssistantTurn:

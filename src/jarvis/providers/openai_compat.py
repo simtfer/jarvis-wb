@@ -30,7 +30,8 @@ class OpenAICompatProvider(BaseProvider):
     """通过 /chat/completions 接口与任何 OpenAI 兼容服务对话。"""
 
     name = "openai_compat"
-    timeout = 120.0
+    # 兜底的默认超时（秒）；实际值取构造参数或配置项 JARVIS_REQUEST_TIMEOUT
+    default_timeout = 45.0
 
     def __init__(
         self,
@@ -38,11 +39,15 @@ class OpenAICompatProvider(BaseProvider):
         base_url: str | None = None,
         model: str | None = None,
         tool_hints: dict[str, list[str]] | None = None,
+        request_timeout: float | None = None,
     ) -> None:
-        super().__init__(tool_hints=tool_hints)
-        self.api_key = api_key or settings.api_key
-        self.base_url = (base_url or settings.base_url).rstrip("/")
-        self.model = model or settings.model
+        super().__init__(tool_hints=tool_hints, request_timeout=request_timeout)
+        cfg = settings.load()
+        self.api_key = api_key or cfg.api_key
+        self.base_url = (base_url or cfg.base_url).rstrip("/")
+        self.model = model or cfg.model
+        # 超时必须有限：没有超时的流式请求会把界面无声挂住好几分钟
+        self.timeout = float(request_timeout or cfg.request_timeout or self.default_timeout)
         if not self.api_key:
             raise ProviderError(
                 "缺少 API Key：请在 .env 中设置 JARVIS_API_KEY，"
@@ -50,6 +55,24 @@ class OpenAICompatProvider(BaseProvider):
             )
 
     # ---------- 内部工具 ----------
+
+    @property
+    def _timeout(self) -> httpx.Timeout:
+        """连接阶段卡住多半是网络/代理问题，给短一点；读取阶段留给模型生成。"""
+        return httpx.Timeout(self.timeout, connect=min(15.0, self.timeout))
+
+    def _wrap_http_error(self, e: httpx.HTTPError) -> ProviderError:
+        """把 httpx 的异常翻译成用户看得懂的话——否则界面只会沉默很久。"""
+        if isinstance(e, httpx.TimeoutException):
+            return ProviderError(
+                f"请求超时（{self.timeout:.0f}s）：{self.base_url} 没有及时响应，已中止本轮。"
+                "可调大 .env 里的 JARVIS_REQUEST_TIMEOUT，或换个更快的模型/网关。"
+            )
+        if isinstance(e, httpx.ConnectError):
+            return ProviderError(
+                f"连不上 {self.base_url}：{e}。检查网络/代理，或核对 JARVIS_BASE_URL。"
+            )
+        return ProviderError(f"调用 LLM 失败：{type(e).__name__}: {e}")
 
     def _payload(self, messages: list[Message], tools: list[ToolSpec] | None, stream: bool) -> dict[str, Any]:
         payload: dict[str, Any] = {"model": self.model, "messages": messages, "stream": stream}
@@ -80,15 +103,17 @@ class OpenAICompatProvider(BaseProvider):
                 self._url,
                 json=self._payload(messages, tools, stream=False),
                 headers=self._headers,
-                timeout=self.timeout,
+                timeout=self._timeout,
             )
             if resp.status_code >= 400:
                 self._raise(resp)
             message = resp.json()["choices"][0]["message"]
         except ProviderError:
             raise
-        except (httpx.HTTPError, KeyError, IndexError) as e:
-            raise ProviderError(f"调用 LLM 失败: {e}") from e
+        except httpx.HTTPError as e:
+            raise self._wrap_http_error(e) from e
+        except (KeyError, IndexError, ValueError) as e:
+            raise ProviderError(f"接口返回了意外的结构：{type(e).__name__}: {e}") from e
 
         calls = [
             ToolCall(
@@ -114,7 +139,7 @@ class OpenAICompatProvider(BaseProvider):
                 self._url,
                 json=self._payload(messages, tools, stream=True),
                 headers=self._headers,
-                timeout=self.timeout,
+                timeout=self._timeout,
             ) as resp:
                 if resp.status_code >= 400:
                     resp.read()
@@ -154,7 +179,7 @@ class OpenAICompatProvider(BaseProvider):
         except ProviderError:
             raise
         except httpx.HTTPError as e:
-            raise ProviderError(f"流式调用失败: {e}") from e
+            raise self._wrap_http_error(e) from e
 
         if acc:
             calls = [

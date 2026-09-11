@@ -73,9 +73,10 @@ class EchoProvider(BaseProvider):
         base_url: str | None = None,
         model: str | None = None,
         tool_hints: dict[str, list[str]] | None = None,
+        request_timeout: float | None = None,
         delay: float = 0.015,
     ) -> None:
-        super().__init__(tool_hints=tool_hints)
+        super().__init__(tool_hints=tool_hints, request_timeout=request_timeout)
         self.delay = delay
 
     # ---------- 内部：组装本轮回复 ----------

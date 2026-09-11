@@ -7,12 +7,15 @@
 from __future__ import annotations
 
 import sys
+import threading
+import time
 
 from rich.console import Console, Group
 from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from . import __version__
 from .config import settings
@@ -50,18 +53,32 @@ def _preview(text: str, limit: int = 90) -> str:
 
 
 class StreamView:
-    """把流式文本增量与工具调用过程实时画到终端上。"""
+    """把流式文本增量与工具调用过程实时画到终端上。
+
+    另外带一个"静默看门狗"：只要超过 quiet_after 秒没有任何增量，就把已等待时长
+    显示出来——慢就是慢，但不能让用户以为程序卡死了。
+    """
 
     def __init__(self, console: Console) -> None:
         self.console = console
         self.live: Live | None = None
         self.buffer: list[str] = []
         self.notes: list[str] = []
+        self.status = ""
+        self._t_last = time.monotonic()
+        self._stop = threading.Event()
+        self._watchdog: threading.Thread | None = None
 
     # ---- 回调 ----
 
+    def on_status(self, message: str) -> None:
+        self.status = message
+        self.refresh()
+
     def on_text(self, chunk: str) -> None:
         self.buffer.append(chunk)
+        self.status = ""
+        self._t_last = time.monotonic()
         self.refresh()
 
     def on_tool(self, call: ToolCall, result: str) -> None:
@@ -73,8 +90,36 @@ class StreamView:
         self.notes.append(
             f"[yellow]⚙ 调用工具[/] [bold cyan]{call.name}[/][dim]({args})[/]"
         )
-        self.notes.append(f"[dim]   ↳ {_preview(result)}[/]")
+        elapsed = time.monotonic() - self._t_last
+        self.notes.append(
+            f"[dim]   ↳ {_preview(result)}[/] [dim]（本轮耗时 {elapsed:.1f}s）[/]"
+        )
+        self.status = ""
+        self._t_last = time.monotonic()
         self.refresh()
+
+    # ---- 看门狗 ----
+
+    def start_watchdog(self, quiet_after: float = 6.0, tick: float = 1.0) -> None:
+        """长时间没有增量时，把等待时长显示到面板上。"""
+        self._t_last = time.monotonic()
+        self._stop.clear()
+
+        def _loop() -> None:
+            while not self._stop.wait(tick):
+                idle = time.monotonic() - self._t_last
+                if idle >= quiet_after:
+                    self.status = (
+                        f"⏳ 已等待 {idle:.0f}s，仍在等模型响应"
+                        "（Ctrl+C 可打断本轮；请求超时见 .env 的 JARVIS_REQUEST_TIMEOUT）"
+                    )
+                    self.refresh()
+
+        self._watchdog = threading.Thread(target=_loop, name="jarvis-watchdog", daemon=True)
+        self._watchdog.start()
+
+    def stop_watchdog(self) -> None:
+        self._stop.set()
 
     # ---- 渲染 ----
 
@@ -82,9 +127,12 @@ class StreamView:
         parts: list = list(self.notes)
         content = "".join(self.buffer)
         if content:
-            parts.append(Panel(Markdown(content), title="[cyan]JARVIS[/]", border_style="cyan"))
-        elif not parts:
-            parts.append(Panel("[dim]······[/]", title="[cyan]JARVIS[/]", border_style="cyan"))
+            inner: object = Markdown(content)
+            if self.status:
+                inner = Group(inner, Text(self.status, style="dim"))
+        else:
+            inner = Text(self.status or "······", style="dim")
+        parts.append(Panel(inner, title="[cyan]JARVIS[/]", border_style="cyan"))
         return Group(*parts)
 
     def refresh(self) -> None:
@@ -98,7 +146,16 @@ def ask_brain(brain: Brain, user_text: str) -> None:
     try:
         with Live(view.render(), console=console, refresh_per_second=12) as live:
             view.live = live
-            reply = brain.think(user_text, on_text=view.on_text, on_tool=view.on_tool)
+            view.start_watchdog()
+            try:
+                reply = brain.think(
+                    user_text,
+                    on_text=view.on_text,
+                    on_tool=view.on_tool,
+                    on_status=view.on_status,
+                )
+            finally:
+                view.stop_watchdog()
             live.update(view.render())
     except ProviderError as e:
         console.print(Panel(f"[red]{e}[/]", title="[red]大脑出错[/]", border_style="red"))
@@ -143,6 +200,13 @@ def print_tools() -> None:
         params = "、".join(skill.parameters) or "—"
         table.add_row(skill.name, params, "、".join(skill.required) or "—")
     console.print(table)
+    cfg = settings.load()
+    state = "[green]已开启[/]" if cfg.shell_enabled else "[yellow]默认关闭[/]"
+    allow = "、".join(cfg.shell_allow) or "未设置"
+    console.print(
+        f"[dim]命令执行 run_command：{state}（白名单：{allow}；超时 {cfg.shell_timeout}s）。"
+        "关闭状态下模型调用它会被直接拒绝，不会再重试。[/]"
+    )
     console.print("[dim]提示：模型自行决定何时调用；用 /local off 可让所有输入都走 LLM+工具链路。[/]")
 
 

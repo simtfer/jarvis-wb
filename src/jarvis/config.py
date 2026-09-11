@@ -30,12 +30,14 @@ class Settings:
     base_url: str = "https://api.deepseek.com/v1"
     model: str = "deepseek-chat"
     max_turns: int = 20
+    # 单次模型请求的超时（秒）。超时就中止本轮，不让界面无声卡住
+    request_timeout: float = 45.0
     # 流式输出（逐字显示）
     stream: bool = True
     # 是否把本地技能作为工具交给 LLM 调用
     tools_enabled: bool = True
     # 单次对话内最多允许几轮工具调用（防止模型无限循环）
-    max_tool_rounds: int = 4
+    max_tool_rounds: int = 3
     # 正则快速路径：命中即本地执行，不经过 LLM（TUI 里可用 /local 临时开关）
     local_skills: bool = True
     # 长期记忆数据目录（memory.json 所在位置）
@@ -74,6 +76,8 @@ class Settings:
         self.base_url = env.get("JARVIS_BASE_URL", self.base_url).strip()
         self.model = env.get("JARVIS_MODEL", self.model).strip()
         self.max_turns = int(env.get("JARVIS_MAX_TURNS", self.max_turns))
+        if env.get("JARVIS_REQUEST_TIMEOUT"):
+            self.request_timeout = float(env["JARVIS_REQUEST_TIMEOUT"])
         self.stream = _env_bool(env, "JARVIS_STREAM", self.stream)
         self.tools_enabled = _env_bool(env, "JARVIS_TOOLS", self.tools_enabled)
         self.local_skills = _env_bool(env, "JARVIS_LOCAL_SKILLS", self.local_skills)
