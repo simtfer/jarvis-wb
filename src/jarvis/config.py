@@ -44,6 +44,10 @@ class Settings:
     auto_recall: bool = True
     # 自动召回最多注入几条
     recall_top_k: int = 3
+    # 命令执行：默认禁用；白名单前缀（逗号分隔）与超时
+    shell_enabled: bool = False
+    shell_allow: list[str] = field(default_factory=list)
+    shell_timeout: int = 30
     system_prompt: str = (
         "你是贾维斯（JARVIS），非常先生的私人 AI 助手。"
         "风格：沉稳、高效、略带英式幽默，像钢铁侠电影中的贾维斯一样。"
@@ -78,6 +82,11 @@ class Settings:
             self.data_dir = Path(env["JARVIS_DATA_DIR"].strip())
         self.auto_recall = _env_bool(env, "JARVIS_AUTO_RECALL", self.auto_recall)
         self.recall_top_k = int(env.get("JARVIS_RECALL_TOP_K", self.recall_top_k))
+        self.shell_enabled = _env_bool(env, "JARVIS_SHELL_ENABLED", self.shell_enabled)
+        self.shell_allow = [
+            a.strip() for a in env.get("JARVIS_SHELL_ALLOW", "").split(",") if a.strip()
+        ]
+        self.shell_timeout = int(env.get("JARVIS_SHELL_TIMEOUT", self.shell_timeout))
         self._loaded = True
         return self
 

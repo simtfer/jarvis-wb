@@ -11,6 +11,8 @@ from typing import Any
 from .base import Skill
 from .calc_skill import CalcSkill
 from .memory_skill import ForgetMemorySkill, RecallMemorySkill, SaveMemorySkill
+from .reminder_skill import AddReminderSkill, ListRemindersSkill, RemoveReminderSkill
+from .shell_skill import RunCommandSkill
 from .system_skill import SystemInfoSkill
 from .time_skill import TimeSkill
 
@@ -36,6 +38,10 @@ def load_builtin_skills() -> None:
         SaveMemorySkill(),
         RecallMemorySkill(),
         ForgetMemorySkill(),
+        AddReminderSkill(),
+        ListRemindersSkill(),
+        RemoveReminderSkill(),
+        RunCommandSkill(),
     ):
         register(skill)
     _LOADED = True

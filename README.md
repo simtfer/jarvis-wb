@@ -1,8 +1,8 @@
 # J.A.R.V.I.S. — 私人 AI 助手框架
 
-> Just A Rather Very Intelligent System · v0.3
+> Just A Rather Very Intelligent System · v0.4
 
-钢铁侠式私人助手的 Python 骨架：**可插拔 LLM 大脑 + 流式输出 + 工具调用 + 长期记忆 + TUI 对话入口**。
+钢铁侠式私人助手的 Python 骨架：**可插拔 LLM 大脑 + 流式输出 + 工具调用 + 长期记忆 + 日程提醒 + 受控命令执行 + TUI**。
 离线 Echo 模式即可跑通全链路，接上 API Key 就换成真大脑。
 
 ## 快速开始
@@ -12,7 +12,7 @@ cd /d/tmp/jarvis
 uv sync                 # 安装依赖到项目 venv
 
 uv run jarvis           # 离线模式直接体验（含流式与工具调用演示）
-uv run pytest           # 跑测试（30 项，全部离线）
+uv run pytest           # 跑测试（46 项，全部离线）
 ```
 
 ## 接入真实 LLM（任选一家 OpenAI 兼容服务）
@@ -69,6 +69,17 @@ TUI 里用 `/local off` 可关掉快速路径，让所有输入都走「LLM + �
 - 检索零依赖：拉丁词 + 中文字/双字词元重叠打分，记忆量大了再换 sqlite/向量库，接口不变；
 - TUI：`/memory` 查看、`/remember <内容>` 直存、`/memory del <编号|关键词>` 删除。
 
+**⑤ 日程提醒（v0.4）** — 中文时间解析（`10分钟后`、`明天9点`、`下午3点半`、ISO），JSON 持久化，
+后台线程到点主动打印提醒；离线期间到期的启动时补发。
+
+**⑥ 受控命令执行（v0.4）** — `run_command` 工具，**默认禁用**，三层防线：
+
+1. 总开关 `JARVIS_SHELL_ENABLED`（默认 false）；
+2. 白名单前缀 `JARVIS_SHELL_ALLOW`（如 `python,git status,dir`）；
+3. 黑名单正则一票否决（递归删除/格式化/注册表/关机/计划任务等），就算进了白名单也拦。
+
+外加超时控制与输出截断。
+
 ## 架构
 
 ```
@@ -76,6 +87,7 @@ src/jarvis/
 ├── main.py              # TUI 入口：流式渲染、工具调用可视化、斜杠命令
 ├── config.py            # 配置中心（.env / 环境变量）
 ├── ltm.py               # 长期记忆：JSON 持久化 + 关键词检索（零外部依赖）
+├── scheduler.py         # 提醒调度：中文时间解析 + 持久化 + 后台线程
 ├── core/
 │   ├── brain.py         # 大脑 = 提供商 + 记忆 + 工具编排（Agent Loop + 自动召回）
 │   └── memory.py        # 会话记忆：按"轮"存储，裁剪不破坏工具调用链
@@ -88,7 +100,9 @@ src/jarvis/
     ├── time_skill.py    # get_time：无参数工具
     ├── calc_skill.py    # calculate：带参数工具（AST 白名单求值，不用 eval）
     ├── system_skill.py  # system_info：实时系统状态
-    └── memory_skill.py  # save/recall/forget_memory：长期记忆存取
+    ├── memory_skill.py  # save/recall/forget_memory：长期记忆存取
+    ├── reminder_skill.py  # add/list/remove_reminder：日程提醒
+    └── shell_skill.py  # run_command：受控命令执行（默认禁用）
 ```
 
 ### 斜杠命令
@@ -101,6 +115,8 @@ src/jarvis/
 | `/local [on\|off]` | 切换正则快速路径 |
 | `/memory` | 查看长期记忆（`/memory del <编号\|关键词>` 删除） |
 | `/remember <内容>` | 直接存一条长期记忆 |
+| `/remind <时间> <内容>` | 设提醒（如 `/remind 10分钟后 喝水`） |
+| `/reminders` | 查看待提醒（`del` 子命令取消） |
 | `/reset` | 清空会话记忆 |
 | `/provider` | 当前提供商与能力 |
 | `/exit` | 退出 |
@@ -132,5 +148,5 @@ class WeatherSkill(Skill):
 - [x] v0.1 框架：TUI + 插件式大脑 + 记忆 + 技能系统
 - [x] v0.2 流式输出 + 工具调用（LLM 主动调用本地技能）
 - [x] v0.3 长期记忆（本地 JSON + 关键词自动召回）
-- [ ] v0.4 系统控制技能（日程、提醒、执行命令）
+- [x] v0.4 系统控制（日程提醒 + 受控命令执行）
 - [ ] v0.5 语音交互（STT + TTS），喊一声 "Jarvis"

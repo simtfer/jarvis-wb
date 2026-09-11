@@ -20,7 +20,8 @@ from .core import Brain
 from .ltm import get_ltm
 from .providers import available_providers
 from .providers.base import ProviderError, ToolCall
-from .skills import dispatch, list_skills
+from .scheduler import get_store, start_reminder_worker
+from .skills import dispatch, invoke_tool, list_skills
 
 console = Console()
 
@@ -34,6 +35,8 @@ HELP = """[bold]可用命令[/]
   /local [on|off] 切换"正则快速路径"（命中不走 LLM，默认 on）
   /memory            查看长期记忆（/memory del <编号|关键词> 删除）
   /remember <内容>   直接存一条长期记忆
+  /remind <时间> <内容>  设提醒（如 /remind 10分钟后 喝水）
+  /reminders         查看待提醒（/reminders del <编号|关键词> 取消）
   /reset          清空会话记忆
   /provider       查看当前 LLM 提供商与能力
   /exit           退出"""
@@ -172,6 +175,11 @@ def print_memory(arg: str = "") -> None:
     console.print(table)
 
 
+def notify_reminder(text: str) -> None:
+    """后台提醒线程的回调：到点主动打印。"""
+    console.print(f"\n[bold yellow]⏰ {text}[/]")
+
+
 def handle_command(brain: Brain, user_text: str, local_mode: list[bool]) -> list[bool]:
     """处理斜杠命令，返回（可能被修改的）状态。"""
     cmd, _, arg = user_text.partition(" ")
@@ -198,6 +206,22 @@ def handle_command(brain: Brain, user_text: str, local_mode: list[bool]) -> list
         else:
             item = get_ltm().remember(arg)
             console.print(f"[dim]已记住（#{item.id[:8]}）：[/]{item.text}")
+    elif cmd == "/remind":
+        when, _, content = arg.partition(" ")
+        if not when or not content.strip():
+            console.print("[yellow]用法：/remind <时间> <内容>，如 /remind 10分钟后 喝水[/]")
+        else:
+            console.print(invoke_tool("add_reminder", {"content": content.strip(), "when": when.strip()}))
+    elif cmd == "/reminders":
+        if arg.startswith("del"):
+            ident = arg[3:].strip()
+            removed = get_store().remove(ident)
+            if removed:
+                console.print(f"[dim]已取消 {removed} 个提醒。[/]")
+            else:
+                console.print(f"[yellow]没有匹配「{ident}」的提醒。[/]")
+        else:
+            console.print(invoke_tool("list_reminders", {}))
     elif cmd == "/reset":
         brain.reset()
         console.print("[dim]记忆已清空。[/]")
@@ -219,6 +243,13 @@ def main() -> int:
 
     console.print(Panel(BANNER, border_style="cyan"))
     print_status(brain)
+
+    # 提醒：先补发离线期间到期的，再启动后台检查线程
+    store = get_store()
+    for item in store.due():
+        console.print(f"[yellow]⏰ 离线期间的提醒：{item.text}[/]")
+    start_reminder_worker(store, notify_reminder)
+
     console.print("[dim]输入消息开始对话，/help 查看命令，/exit 退出。[/]\n")
 
     local_mode = [cfg.local_skills]
