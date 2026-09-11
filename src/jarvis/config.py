@@ -38,6 +38,12 @@ class Settings:
     max_tool_rounds: int = 4
     # 正则快速路径：命中即本地执行，不经过 LLM（TUI 里可用 /local 临时开关）
     local_skills: bool = True
+    # 长期记忆数据目录（memory.json 所在位置）
+    data_dir: Path = PROJECT_ROOT / "data"
+    # 每轮对话前自动召回相关长期记忆，注入 system prompt
+    auto_recall: bool = True
+    # 自动召回最多注入几条
+    recall_top_k: int = 3
     system_prompt: str = (
         "你是贾维斯（JARVIS），非常先生的私人 AI 助手。"
         "风格：沉稳、高效、略带英式幽默，像钢铁侠电影中的贾维斯一样。"
@@ -68,6 +74,10 @@ class Settings:
         self.tools_enabled = _env_bool(env, "JARVIS_TOOLS", self.tools_enabled)
         self.local_skills = _env_bool(env, "JARVIS_LOCAL_SKILLS", self.local_skills)
         self.max_tool_rounds = int(env.get("JARVIS_MAX_TOOL_ROUNDS", self.max_tool_rounds))
+        if env.get("JARVIS_DATA_DIR"):
+            self.data_dir = Path(env["JARVIS_DATA_DIR"].strip())
+        self.auto_recall = _env_bool(env, "JARVIS_AUTO_RECALL", self.auto_recall)
+        self.recall_top_k = int(env.get("JARVIS_RECALL_TOP_K", self.recall_top_k))
         self._loaded = True
         return self
 

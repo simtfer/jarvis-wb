@@ -1,8 +1,8 @@
 # J.A.R.V.I.S. — 私人 AI 助手框架
 
-> Just A Rather Very Intelligent System · v0.2
+> Just A Rather Very Intelligent System · v0.3
 
-钢铁侠式私人助手的 Python 骨架：**可插拔 LLM 大脑 + 流式输出 + 工具调用（function calling）+ 会话记忆 + TUI 对话入口**。
+钢铁侠式私人助手的 Python 骨架：**可插拔 LLM 大脑 + 流式输出 + 工具调用 + 长期记忆 + TUI 对话入口**。
 离线 Echo 模式即可跑通全链路，接上 API Key 就换成真大脑。
 
 ## 快速开始
@@ -12,7 +12,7 @@ cd /d/tmp/jarvis
 uv sync                 # 安装依赖到项目 venv
 
 uv run jarvis           # 离线模式直接体验（含流式与工具调用演示）
-uv run pytest           # 跑测试（19 项，全部离线）
+uv run pytest           # 跑测试（30 项，全部离线）
 ```
 
 ## 接入真实 LLM（任选一家 OpenAI 兼容服务）
@@ -61,14 +61,23 @@ JARVIS_MODEL=deepseek-chat
 **③ 两条触发路径** — 同一份技能，既能被正则命中直接本地执行（零延迟），也能被 LLM 当工具调用：
 TUI 里用 `/local off` 可关掉快速路径，让所有输入都走「LLM + 工具」链路。
 
+**④ 长期记忆（v0.3）** — 会话记忆关机即散，长期记忆落在本地 JSON（`data/memory.json`）：
+
+- 模型可自主存取：`save_memory` / `recall_memory` / `forget_memory` 三个工具；
+- **自动召回**：每轮对话前，按关键词相关度把最相关的几条记忆注入 system prompt（RAG-lite），
+  主人不用提醒，贾维斯自己想起来；
+- 检索零依赖：拉丁词 + 中文字/双字词元重叠打分，记忆量大了再换 sqlite/向量库，接口不变；
+- TUI：`/memory` 查看、`/remember <内容>` 直存、`/memory del <编号|关键词>` 删除。
+
 ## 架构
 
 ```
 src/jarvis/
 ├── main.py              # TUI 入口：流式渲染、工具调用可视化、斜杠命令
 ├── config.py            # 配置中心（.env / 环境变量）
+├── ltm.py               # 长期记忆：JSON 持久化 + 关键词检索（零外部依赖）
 ├── core/
-│   ├── brain.py         # 大脑 = 提供商 + 记忆 + 工具编排（Agent Loop）
+│   ├── brain.py         # 大脑 = 提供商 + 记忆 + 工具编排（Agent Loop + 自动召回）
 │   └── memory.py        # 会话记忆：按"轮"存储，裁剪不破坏工具调用链
 ├── providers/           # 可插拔 LLM 后端
 │   ├── base.py          # 事件模型：Chunk / ToolCallsEvent / AssistantTurn
@@ -78,7 +87,8 @@ src/jarvis/
     ├── base.py          # Skill 基类：patterns（正则） + tool_spec()/invoke()（工具）
     ├── time_skill.py    # get_time：无参数工具
     ├── calc_skill.py    # calculate：带参数工具（AST 白名单求值，不用 eval）
-    └── system_skill.py  # system_info：实时系统状态
+    ├── system_skill.py  # system_info：实时系统状态
+    └── memory_skill.py  # save/recall/forget_memory：长期记忆存取
 ```
 
 ### 斜杠命令
@@ -89,6 +99,8 @@ src/jarvis/
 | `/skills` | 本地技能列表 |
 | `/tools` | 暴露给 LLM 的工具定义 |
 | `/local [on\|off]` | 切换正则快速路径 |
+| `/memory` | 查看长期记忆（`/memory del <编号\|关键词>` 删除） |
+| `/remember <内容>` | 直接存一条长期记忆 |
 | `/reset` | 清空会话记忆 |
 | `/provider` | 当前提供商与能力 |
 | `/exit` | 退出 |
@@ -119,6 +131,6 @@ class WeatherSkill(Skill):
 
 - [x] v0.1 框架：TUI + 插件式大脑 + 记忆 + 技能系统
 - [x] v0.2 流式输出 + 工具调用（LLM 主动调用本地技能）
-- [ ] v0.3 长期记忆（本地向量库 / 文件笔记）
+- [x] v0.3 长期记忆（本地 JSON + 关键词自动召回）
 - [ ] v0.4 系统控制技能（日程、提醒、执行命令）
 - [ ] v0.5 语音交互（STT + TTS），喊一声 "Jarvis"

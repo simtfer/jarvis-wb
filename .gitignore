@@ -3,6 +3,9 @@
 .venv/
 venv/
 
+# 贾维斯的本地数据（长期记忆等）
+data/
+
 # Python
 __pycache__/
 *.py[cod]

@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from ..config import settings
+from ..ltm import get_ltm
 from ..providers import create_provider
 from ..providers.base import (
     BaseProvider,
@@ -42,6 +43,11 @@ class Brain:
         self.max_tool_rounds = cfg.max_tool_rounds
         self.tools_enabled = cfg.tools_enabled
         self.stream = cfg.stream
+        self.ltm = get_ltm()
+        self.auto_recall = cfg.auto_recall
+        self.recall_top_k = cfg.recall_top_k
+        # 每轮 think() 开头计算一次，供本轮所有模型请求复用
+        self._recall_suffix = ""
 
     # ---------- 主流程 ----------
 
@@ -54,6 +60,7 @@ class Brain:
         """处理一句用户输入：流式产出文本、按需调用本地工具，返回最终回复。"""
         self.memory.add("user", user_text)
         tools = tool_specs() if self.tools_enabled else None
+        self._recall_suffix = self._build_recall_suffix(user_text)
 
         text = ""
         calls: list[ToolCall] = []
@@ -80,6 +87,16 @@ class Brain:
         self.memory.add("assistant", notice)
         return notice
 
+    def _build_recall_suffix(self, user_text: str) -> str:
+        """自动召回：把与本次输入相关的长期记忆注入 system prompt。"""
+        if not self.auto_recall or not len(self.ltm):
+            return ""
+        hits = self.ltm.recall(user_text, limit=self.recall_top_k)
+        if not hits:
+            return ""
+        lines = "\n".join(f"- {item.text}" for item, _ in hits)
+        return f"\n\n[长期记忆参考]\n{lines}"
+
     def _run_once(
         self, tools: list[dict[str, Any]] | None, on_text: TextCallback | None
     ) -> tuple[str, list[ToolCall]]:
@@ -87,7 +104,12 @@ class Brain:
         buffer: list[str] = []
         calls: list[ToolCall] = []
 
-        for event in self.provider.stream(self.memory.messages(), tools=tools):
+        messages = self.memory.messages()
+        if self._recall_suffix:
+            # 只改本轮请求里的 system 消息，不写入记忆
+            messages[0] = {**messages[0], "content": messages[0]["content"] + self._recall_suffix}
+
+        for event in self.provider.stream(messages, tools=tools):
             if isinstance(event, Chunk):
                 buffer.append(event.text)
                 if on_text and self.stream:

@@ -123,7 +123,9 @@ class EchoProvider(BaseProvider):
         args: dict[str, Any] = {}
         for key, schema in props.items():
             lower = key.lower()
-            if "expr" in lower or schema.get("type") == "number":
+            if schema.get("type") == "array":
+                args[key] = []
+            elif "expr" in lower or schema.get("type") == "number":
                 m = _MATH_RE.search(text)
                 args[key] = _best_expression(text) if m else text
             elif lower in ("query", "text", "question", "keyword", "name", "topic"):

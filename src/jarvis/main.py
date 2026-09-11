@@ -1,7 +1,7 @@
 """贾维斯 TUI 入口：终端对话界面（流式输出 + 工具调用可视化）。
 
 启动:  uv run jarvis   （或 python -m jarvis）
-命令:  /help /skills /tools /local /reset /provider /exit
+命令:  /help /skills /tools /local /memory /remember /reset /provider /exit
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ from rich.table import Table
 from . import __version__
 from .config import settings
 from .core import Brain
+from .ltm import get_ltm
 from .providers import available_providers
 from .providers.base import ProviderError, ToolCall
 from .skills import dispatch, list_skills
@@ -31,6 +32,8 @@ HELP = """[bold]可用命令[/]
   /skills         查看已挂载的本地技能
   /tools          查看暴露给 LLM 的工具定义
   /local [on|off] 切换"正则快速路径"（命中不走 LLM，默认 on）
+  /memory            查看长期记忆（/memory del <编号|关键词> 删除）
+  /remember <内容>   直接存一条长期记忆
   /reset          清空会话记忆
   /provider       查看当前 LLM 提供商与能力
   /exit           退出"""
@@ -140,6 +143,35 @@ def print_tools() -> None:
     console.print("[dim]提示：模型自行决定何时调用；用 /local off 可让所有输入都走 LLM+工具链路。[/]")
 
 
+def print_memory(arg: str = "") -> None:
+    ltm = get_ltm()
+    if arg.startswith("del"):
+        ident = arg[3:].strip()
+        removed = ltm.forget(ident)
+        if removed:
+            console.print(f"[dim]已删除 {removed} 条记忆。[/]")
+        else:
+            console.print(f"[yellow]没有匹配「{ident}」的记忆。[/]")
+        return
+    items = ltm.all()
+    if not items:
+        console.print("[dim]长期记忆还是空的——用 /remember <内容> 或让贾维斯帮你存。[/]")
+        return
+    table = Table(title=f"长期记忆（{len(items)} 条）")
+    table.add_column("编号", style="cyan")
+    table.add_column("内容")
+    table.add_column("标签", style="dim")
+    table.add_column("命中", style="green", justify="right")
+    for item in items:
+        table.add_row(
+            f"#{item.id[:8]}",
+            _preview(item.text, 60),
+            "、".join(item.tags) or "—",
+            str(item.hits),
+        )
+    console.print(table)
+
+
 def handle_command(brain: Brain, user_text: str, local_mode: list[bool]) -> list[bool]:
     """处理斜杠命令，返回（可能被修改的）状态。"""
     cmd, _, arg = user_text.partition(" ")
@@ -158,6 +190,14 @@ def handle_command(brain: Brain, user_text: str, local_mode: list[bool]) -> list
         if arg in ("on", "off"):
             local_mode[0] = arg == "on"
         console.print(f"[dim]正则快速路径：{'on' if local_mode[0] else 'off'}[/]")
+    elif cmd == "/memory":
+        print_memory(arg)
+    elif cmd == "/remember":
+        if not arg:
+            console.print("[yellow]用法：/remember <要记的内容>[/]")
+        else:
+            item = get_ltm().remember(arg)
+            console.print(f"[dim]已记住（#{item.id[:8]}）：[/]{item.text}")
     elif cmd == "/reset":
         brain.reset()
         console.print("[dim]记忆已清空。[/]")

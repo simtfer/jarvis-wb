@@ -10,6 +10,7 @@ from typing import Any
 
 from .base import Skill
 from .calc_skill import CalcSkill
+from .memory_skill import ForgetMemorySkill, RecallMemorySkill, SaveMemorySkill
 from .system_skill import SystemInfoSkill
 from .time_skill import TimeSkill
 
@@ -28,7 +29,14 @@ def load_builtin_skills() -> None:
     global _LOADED
     if _LOADED:
         return
-    for skill in (TimeSkill(), CalcSkill(), SystemInfoSkill()):
+    for skill in (
+        TimeSkill(),
+        CalcSkill(),
+        SystemInfoSkill(),
+        SaveMemorySkill(),
+        RecallMemorySkill(),
+        ForgetMemorySkill(),
+    ):
         register(skill)
     _LOADED = True
 
